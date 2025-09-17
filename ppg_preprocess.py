@@ -188,7 +188,8 @@ def main():
     # 2. SQA
     # 
     print("SQA")
-    window_length_sec = 60*8 # 60초 * 8 = 8분
+    # window_length_sec = 60*8 # 60초 * 8 = 8분
+    window_length_sec = 60 * 5
     sampling_rate = 25
     
     input_sig = splited_df["ppg"]
@@ -196,7 +197,7 @@ def main():
     clean_indices, noisy_indices = sqa(
         sig=input_sig,
         sampling_rate=sampling_rate,
-        filter_signal=True
+        filter_signal=False
     )
     
     # 3. Reconstruction
@@ -211,6 +212,12 @@ def main():
     
     
     # 4. Segmentation
+    # 연속된 clean구간을 찾고... start_idx, end_idx 형태로 추출
+    # 해당 clean구간을 window_length 길이대로 잘라서 return
+    # start_index, segment_signal 튜플리스트로 반환
+    # -> 그렇다면 결국은 noisy한 부분들이 여기서 걸러져서 나오는거고?
+    #       어느 시점에 밥을 먹었다던가 담배를 폈다던가 얼라인을 맞추기는 쉽지 않음..?
+
     print("segmentation")
     
     print(1)
@@ -238,7 +245,6 @@ def main():
         
         for i in range(len(clean_segments)):
             inner_peaks = ppg_peaks(np.asarray(clean_segments[i][1]), sampling_rate, seconds=15, overlap=0, minlen=15)
-            
             peaks.append(inner_peaks)
         
         print(1)
@@ -255,6 +261,15 @@ def main():
         print('Done!')
 
     print(1)
+    
+    """
+    지금 1차적으로 구상한 방법을 사용하니 HR이 16, 13과 같이 제대로 나오지 않음..
+    
+    Denoising을 하지 않고 그대로 쌩 값을 넣으면 HR이 60중반~ 으로 제대로 나오는데 문제는 Denoising인것 같음.
+    Denoising을 적용하고 HRV값들을 뽑으면, 절대적인 수치자체도 일반적인 케이스와 많이 다르게 보여짐..
+    
+    
+    """
 
     
     
