@@ -63,20 +63,20 @@ def clean_seg_extraction(
     
     # Flatten the noise indices list
     flat_list_noise = [item for noise in noisy_indices for item in noise]
-    print(1)
+
     # Define a quality vector (0 indictes clean and 1 indicates noisy)
     quality = [1 if i in flat_list_noise else 0 for i in range(len(sig))]
-    print(1)
+
     # Store ppg signal with quality vector in dataframe
     quality_df['quality'] = quality
     quality_df['ppg'] = sig
     
     # Find start and end indices of clean parts in the quality list
     start_end_clean_idx = find_clean_parts(quality_df['quality'].tolist())
-    print(1)
     
     # Initialize a list to store total clean segments with the specified window length
     clean_segments = []
+    clean_indices = []
 
     # Extract clean segments based on window length
     for indices in start_end_clean_idx:
@@ -84,19 +84,28 @@ def clean_seg_extraction(
         if (indices[1] - indices[0]) >= window_length:
             # Select the current clean part
             clean_part = quality_df['ppg'][indices[0] : indices[1]].tolist()
-            
+            clean_part_indices = quality_df['ppg'][indices[0] : indices[1]].index.tolist()
+
             # Calculate the number of segments with the specified window length that can be extarcted from the current clean part
             num_segments = len(clean_part) // window_length
             
             # Extract clean segment with the specified window length from current clean part and their starting indices
             segments = [((indices[0] + i * window_length), clean_part[i * window_length: (i + 1) * window_length]) for i in range(num_segments)]
+            ####
+            segments = []
+            for i in range(num_segments):
+                start_idx = indices[0]+ i*window_length
+                valid_clean_part = clean_part[i * window_length : (i+1) * window_length]
+                valid_clean_part_indices = clean_part_indices[i * window_length : (i+1) * window_length]
+                segments.append((start_idx, valid_clean_part))
+                clean_indices.append(valid_clean_part_indices)
+            ####
             
             # Add extracted segments to total clean segments
             clean_segments.extend(segments)
-    print(1)
 
                 
-    return clean_segments
+    return clean_segments, clean_indices
 
 
 if __name__ == "__main__":

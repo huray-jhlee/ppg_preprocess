@@ -1,21 +1,25 @@
 import os
-
+import json
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta
 
-from utils import to3
+# Denoising
+from wiener_denosing import WienerDenoising
+
+# E2E-PPG
 from ppg_sqa import sqa
+from kazemi_peak_detection import ppg_peaks
 from ppg_hrv_extraction import hrv_extraction
 from ppg_reconstruction import reconstruction
 from ppg_clean_extraction import clean_seg_extraction
 
-from wiener_denosing import WienerDenoising
-from kazemi_peak_detection import ppg_peaks
-
+from utils import to3, convert_date, label_filtering, extract_behavior_ranges, label_window_from_ranges
 
 DATA_DIR = "/data3/watch_sensor_data/src/processed_data"
-
+LABEL_DIR = "/data3/ppg_data/raw/"
 
 def main():
     """
@@ -38,8 +42,21 @@ def main():
     ## TODO: interation with target_device, each files
     
     target_device = "cf782c01_10c971c2"
-    tmp_data_path = os.path.join(DATA_DIR, target_device, "2025-07-01.parquet")
+    target_date = "250701"
+    cvt_target_date = convert_date(target_date)
     
+    tmp_data_path = os.path.join(DATA_DIR, target_device, f"{cvt_target_date}.parquet")
+    tmp_label_path = os.path.join(LABEL_DIR, target_device, "har_label", f"250714_har.json")
+    
+    ############
+    # label flitering
+    with open(tmp_label_path, "r") as f:
+        label_datas = json.load(f)
+    
+    target_har_label = label_filtering(label_datas, cvt_target_date)
+    target_har_ranges = extract_behavior_ranges(target_har_label)
+    
+    ############
     
     ### input(parquet_file_path, start_time, end_time, window_size)
     raw_parquet = pd.read_parquet(tmp_data_path, engine="pyarrow")
@@ -91,7 +108,6 @@ def main():
         )
         print("Nan in acc, apply ffill, bfill")
     
-    
     # transform struct, splited with windowsize (8 seconds)
     
     window_size = 8000 # ms
@@ -132,7 +148,7 @@ def main():
     
     df = pd.DataFrame(results)
     
-    # =============================================
+    # ========================================================================
     
     # 1. Bandpass Filtering + Denoising
     
@@ -179,7 +195,7 @@ def main():
     
     splited_df = pd.DataFrame(splited_results)
     
-    # =============================================
+    # ========================================================================
     
     # 지금 앞서 ppg값이 비어 있는 케이스가 존재.
     
@@ -194,12 +210,18 @@ def main():
     
     input_sig = splited_df["ppg"]
     
+    # 여기서부터 indices로 인덱스값들을 주고받는데
+    # 여기에 맞춰서 시간들을 index랑 맵핑시켜주면 될 것
+    # clean+noisy = len(splited+df)
+    
     clean_indices, noisy_indices = sqa(
         sig=input_sig,
         sampling_rate=sampling_rate,
         filter_signal=False
     )
     
+    # ========================================================================
+
     # 3. Reconstruction
     print("reconstruction")
     sig_reconstructed, clean_indices, noisy_indices = reconstruction(
@@ -210,6 +232,7 @@ def main():
         filter_signal=False
     )
     
+    # ========================================================================
     
     # 4. Segmentation
     # 연속된 clean구간을 찾고... start_idx, end_idx 형태로 추출
@@ -220,16 +243,15 @@ def main():
 
     print("segmentation")
     
-    print(1)
     window_length = window_length_sec * sampling_rate
     
-    clean_segments = clean_seg_extraction(
+    clean_segments, clean_segments_indices = clean_seg_extraction(
         sig = sig_reconstructed,
         noisy_indices=noisy_indices,
         window_length=window_length
     )
     
-    print(1)
+    seg_start_idx_list = [x[0] for x in clean_segments]
     
     #####
     if len(clean_segments) == 0:
@@ -246,9 +268,6 @@ def main():
         for i in range(len(clean_segments)):
             inner_peaks = ppg_peaks(np.asarray(clean_segments[i][1]), sampling_rate, seconds=15, overlap=0, minlen=15)
             peaks.append(inner_peaks)
-        
-        print(1)
-        
 
         # Perform HR and HRV extraction
         hrv_data = hrv_extraction(
@@ -259,6 +278,22 @@ def main():
         print("HR and HRV parameters:")
         print(hrv_data)
         print('Done!')
+        
+        # add timestamp
+        seg_timestamp = splited_df.iloc[seg_start_idx_list]["timestamp"].values
+        hrv_data["timestamp"] = seg_timestamp
+        
+        label_values = []
+        for _, row in hrv_data.iterrows():
+            window_start_timestamp = row["timestamp"]
+            window_start = datetime.fromtimestamp(window_start_timestamp / 1000, tz=ZoneInfo("Asia/Seoul"))
+            window_end = window_start + timedelta(minutes=5)
+            labels = label_window_from_ranges(window_start, window_end, target_har_ranges)
+            label_values.append(labels)
+        
+        hrv_data["label"] = label_values
+        
+        hrv_data.to_parquet("tmp.parquet", engine="pyarrow", index=False)
 
     print(1)
     
@@ -268,6 +303,9 @@ def main():
     Denoising을 하지 않고 그대로 쌩 값을 넣으면 HR이 60중반~ 으로 제대로 나오는데 문제는 Denoising인것 같음.
     Denoising을 적용하고 HRV값들을 뽑으면, 절대적인 수치자체도 일반적인 케이스와 많이 다르게 보여짐..
     
+    시간, 그에 따른 label들까지 정리까진 추가
+    
+    이후에 이제 코드 모듈화 한번해서 정리하고, 바로 데이터 추출 작업시작 및 데이터 검증
     
     """
 
