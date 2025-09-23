@@ -12,7 +12,7 @@ sys.path.insert(0, parent_dir)
 
 
 class WienerDenoising:
-    def __init__(self):
+    def __init__(self, hz_lp=3, hz_hp=1):
         self.fs_galaxy = 25  # Hz
         self.target_length_galaxy = 200
 
@@ -21,8 +21,8 @@ class WienerDenoising:
 
         self.fft_res = 1024
         self.wf_length = 15
-        self.cutoff_freq_hz_hp = 1
-        self.cutoff_freq_hz_lp = 3
+        self.cutoff_freq_hz_hp = hz_hp  # 1
+        self.cutoff_freq_hz_lp = hz_lp  # 3
 
         self.galaxy_prev_data = {
             'prev_ppg_fft': None,
