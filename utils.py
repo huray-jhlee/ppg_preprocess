@@ -1,8 +1,15 @@
-import numpy as np
+import os
+from tqdm import tqdm
 from zoneinfo import ZoneInfo
 from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+import neurokit2 as nk
+from scipy import signal
+from scipy.signal import resample, butter, filtfilt
 
 def to3(v):
     if isinstance(v, (list, tuple, np.ndarray)):
@@ -18,6 +25,10 @@ def convert_date(date_str: str) -> str:
     day = date_str[4:6]
     return f"{year}-{month}-{day}"
 
+# ========================================================================
+# 0. Data Parsing
+
+## Label filtering
 def label_filtering(label_datas, target_date_str):
     
     target_har_labels = {}
@@ -140,3 +151,316 @@ def label_window_from_ranges(
         )
         labels.append(1 if has_overlap else 0)
     return labels
+
+def data_preprocessing(raw_parquet: pd.DataFrame, target_device):
+    
+    # ========================================================================
+    # time filtering
+    start_time = min(raw_parquet["collected_time"])
+    end_time = max(raw_parquet["collected_time"])
+    
+    mask = (raw_parquet["collected_time"] >= start_time) & (raw_parquet["collected_time"] <= end_time)
+    
+    filtered_df = raw_parquet.loc[mask].reset_index(drop=True)
+    
+    # ========================================================================
+    # preprocess dataframe for denoising (PPG + accelerate)
+    # ppg
+    ppg_df = filtered_df[filtered_df["sensor_type"] == "SAMSUNG_PPG"]
+    ppg_df["ppg"] = pd.Series(ppg_df["data"].map(lambda x: x[2]).to_list(), index=ppg_df.index)
+    
+    # acc
+    acc_df = filtered_df[filtered_df["sensor_type"] == "SAMSUNG_ACCE"]
+    xyz_df = pd.DataFrame(
+        acc_df["data"].map(to3).tolist(),
+        index=acc_df.index,
+        columns=["acc_x", "acc_y", "acc_z"]
+    )
+    
+    processed_acc_df = pd.concat([acc_df["timestamp"], xyz_df], axis=1).reset_index(drop=True)
+    processed_ppg_df = ppg_df[["timestamp", "ppg"]].reset_index(drop=True)
+    
+    # ppg + acc datafarme aligned with timestamp
+    aligned_df = pd.merge_asof(
+        processed_ppg_df.sort_values("timestamp"),
+        processed_acc_df.sort_values("timestamp"),
+        on="timestamp",
+        direction="nearest",
+        tolerance=80,
+        suffixes=["-ppg", "-acc"]
+    )
+    # 결측치 처리
+    if aligned_df.isna().values.any():
+        aligned_df.loc[:, ["acc_x", "acc_y", "acc_z"]] = (
+            aligned_df.loc[:, ["acc_x", "acc_y", "acc_z"]]
+            .astype(float)
+            .ffill()
+            .bfill()
+        )
+        print("Nan in acc, apply ffill, bfill")
+    
+    # ========================================================================
+    # transform struct, splited with windowsize (8 seconds)
+    
+    window_size = 8000 # ms
+    
+    t_min = int(aligned_df["timestamp"].min())
+    t_max = int(aligned_df["timestamp"].max())
+    
+    bins = range(t_min, t_max + window_size, window_size)
+    aligned_df["windowNumber"] = pd.cut(aligned_df["timestamp"], bins=bins, labels=False, right=False)
+    
+    groups = dict(tuple(aligned_df.groupby("windowNumber")))
+    
+    results = []
+    for window_number, splited_df in groups.items():
+        
+        start_time = splited_df["timestamp"].min()
+        end_time = splited_df["timestamp"].max()
+        
+        inner_ppg_list, inner_acc_list, inner_timestamp_list = [], [], []
+        
+        for _, row in splited_df.iterrows():
+            ppg, x, y, z, timestamp = row[["ppg", "acc_x", "acc_y", "acc_z", "timestamp"]]
+            
+            inner_ppg_list.append(str(ppg))
+            inner_acc_list.extend(list(map(str, [x, y, z])))
+            inner_timestamp_list.append(str(timestamp))
+            
+        inner_result = {
+            "device_id": target_device,
+            "windowNumber": window_number,
+            "startTime": start_time,
+            "endTime": end_time,
+            "galaxyPPG": ";".join(inner_ppg_list),
+            "galaxyACC": ";".join(inner_acc_list),
+            "timestamps": ";".join(inner_timestamp_list)
+        }
+        results.append(inner_result)
+    
+    result_df = pd.DataFrame(results)
+    
+    return result_df
+
+
+# 1. Bandpass Filtering + Denoising
+
+def denoising_data(wiener_filter, data_df):
+    
+    results = {
+        "denoisedGalaxy": [None] * len(data_df),
+        "estimated_BPM_Galaxy": [None] * len(data_df)
+    }
+    
+    for i, row in tqdm(data_df.iterrows(), total=len(data_df)):
+        try:
+            galaxy_ppg = - np.array([float(x) for x in row["galaxyPPG"].split(";") if x.strip()])
+            galaxy_acc = np.array([float(x) for x in row["galaxyACC"].split(";") if x.strip()]).reshape(-1, 3)
+            
+            galaxy_denoised, galaxy_bpm = wiener_filter.process_galaxy(
+                galaxy_ppg,
+                galaxy_acc[:, 0],
+                galaxy_acc[:, 1],
+                galaxy_acc[:, 2]
+            )
+            
+            # results["denoisedGalaxy"][i] = ";".join(map(str, (-galaxy_denoised).tolist()))
+            results["denoisedGalaxy"][i] = ";".join(map(str, galaxy_denoised.tolist()))
+            results["estimated_BPM_Galaxy"][i] = galaxy_bpm
+        
+        except Exception as e:
+            print({str(e)})
+            pass
+    
+    for col, values in results.items():
+        data_df[col] = values
+    
+    subset_df = data_df[["timestamps", "denoisedGalaxy"]]
+    
+    splited_results = []
+    for _, row in subset_df.iterrows():
+        timestamps = list(map(float, row["timestamps"].split(";")))
+        ppgs = list(map(float, row["denoisedGalaxy"].split(";")))
+        for timestamp, ppg in zip(timestamps, ppgs):
+            splited_results.append({
+                "timestamp": timestamp,
+                "ppg": ppg
+            })
+    
+    splited_df = pd.DataFrame(splited_results)
+    
+    return splited_df
+
+
+## 
+def peak_detection(sampling_rate, clean_segments):
+    
+    total_peaks = []
+    
+    upsampling_rate = 2
+    sampling_rate_new = sampling_rate * upsampling_rate
+    
+    for i in range(len(clean_segments)):
+        # Normalize PPG Signal
+        ppg_normed = normalize_data(clean_segments[i][1])
+        
+        # Upsampling the Signal
+        resampled = signal.resample(ppg_normed, len(ppg_normed)*upsampling_rate)
+        
+        # Perform peak detction
+        ppg_cleaned = nk.ppg_clean(resampled, sampling_rate=sampling_rate_new)
+        info = nk.ppg_findpeaks(ppg_cleaned, sampling_rate=sampling_rate_new)
+        peaks = info["PPG_Peaks"]
+        
+        # Update peak indices according to the original sampling rate
+        inner_peaks = (peaks // upsampling_rate).astype(int)
+        
+        # Add peaks of the current segment to the total peaks
+        total_peaks.append(inner_peaks)
+    
+    return total_peaks
+
+# -*- coding: utf-8 -*-
+'''
+Miscellaneous functions
+
+'''
+
+def get_data(
+        file_name: str,
+        local_directory: str = "data",
+        usecols: List[str] = ['ppg'],
+        whitespace = False
+) -> np.ndarray:
+    """
+    Import data (e.g., PPG signals)
+    
+    Args:
+        file_name (str): Name of the input file
+        local_directory (str): Data directory
+        usecols (List[str]): The columns to read from the input file
+    
+    Return:
+        sig (np.ndarray): the input signal (e.g., PPG)
+    """
+    try:
+        # Construct the file path
+        file_path = os.path.join(local_directory, file_name)
+        # Load data from the specified CSV file
+        input_data = pd.read_csv(
+            file_path,
+            delim_whitespace=whitespace,
+            usecols=usecols)
+        # Extract signal
+        sig = input_data[usecols[0]].values
+        return sig
+    except FileNotFoundError:
+        print(f"File not found: {file_name}")
+    except pd.errors.EmptyDataError:
+        print(f"Empty data in file: {file_name}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    # Return None in case of an error
+    return None
+
+
+def normalize_data(sig: np.ndarray) -> np.ndarray:
+    """
+    Normalize the input signal between zero and one
+    
+    Args:
+        sig (np.ndarray): PPG signal.
+    
+    Return:
+        np.ndarray: Normalized signal
+    """
+    return (sig - np.min(sig)) / (np.max(sig) - np.min(sig))
+
+
+def resample_signal(
+        sig: np.ndarray,
+        fs_origin: int,
+        fs_target: int = 20,
+) -> np.ndarray:
+    """
+    Resample the signal
+
+    Args:
+        sig (np.ndarray): The input signal.
+        fs_origin (int): The sampling frequency of the input signal.
+        fs_target (int): The sampling frequency of the output signal.
+
+    Return:
+        sig_resampled (np.ndarray): The resampled signal.
+    """
+    # Exit if the sampling frequency already is 20 Hz (return the original signal)
+    if fs_origin == fs_target:
+        return sig
+    # Calculate the resampling rate
+    resampling_rate = fs_target/fs_origin
+    # Resample the signal
+    sig_resampled = resample(sig, int(len(sig)*resampling_rate))
+    # Update the sampling frequency
+    return sig_resampled
+
+
+def bandpass_filter(
+        sig: np.ndarray,
+        fs: int,
+        lowcut: float,
+        highcut: float,
+        order: int=2
+) -> np.ndarray:
+    """
+    Apply a bandpass filter to the input signal.
+
+    Args:
+        sig (np.ndarray): The input signal.
+        fs (int): The sampling frequency of the input signal.
+        lowcut (float): The low cutoff frequency of the bandpass filter.
+        highcut (float): The high cutoff frequency of the bandpass filter.
+
+    Return:
+        sig_filtered (np.ndarray): The filtered signal using a Butterworth bandpass filter.
+    """
+    nyquist = 0.5 * fs
+    low = lowcut / nyquist
+    high = highcut / nyquist
+    b, a = butter(order, [low, high], btype='band')
+    sig_filtered = filtfilt(b, a, sig)
+    return sig_filtered
+
+
+def find_peaks(
+        ppg: np.ndarray,
+        sampling_rate: int,
+        return_sig: bool = False
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Find peaks in PPG.
+
+    Args:
+        ppg (np.ndarray): The input PPG signal.
+        sampling_rate (int): The sampling rate of the signal.
+        return_sig (bool): If True, return the cleaned PPG
+            signal along with the peak indices (default is False).
+
+    Return:
+        peaks (np.ndarray): An array containing the indices of
+            the detected peaks in the PPG signal.
+        ppg_cleaned (np.ndarray): The cleaned PPG signal, return if return_sig is True.
+
+    """
+
+    # Clean the PPG signal and prepare it for peak detection
+    ppg_cleaned = nk.ppg_clean(ppg, sampling_rate=sampling_rate)
+
+    # Peak detection
+    info = nk.ppg_findpeaks(ppg_cleaned, sampling_rate=sampling_rate)
+    peaks = info["PPG_Peaks"]
+
+    # Return either just the peaks or both the cleaned signal and peaks
+    if return_sig:
+        return peaks, ppg_cleaned
+    else:
+        return peaks, None
