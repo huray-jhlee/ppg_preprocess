@@ -33,7 +33,7 @@ def hrv_parameters(
     """
     
     # Calculate window length in minutes
-    window_length_min = (window_length/sampling_rate)/60    
+    window_length_min = (window_length/sampling_rate)/60
     
     # Calculate heart rate
     heart_rate = (len(peaks)/window_length_min)
@@ -89,7 +89,12 @@ def hrv_extraction(
     for i in range(len(peaks)):
         try:
             # Attempt to calculate HRV parameters for the current segment
-            HRV_indices = hrv_parameters(peaks=peaks[i], seg_start_idx=clean_segments[i][0], sampling_rate=sampling_rate, window_length=window_length)
+            HRV_indices = hrv_parameters(
+                peaks=peaks[i], 
+                seg_start_idx=clean_segments[i][0], 
+                sampling_rate=sampling_rate, 
+                window_length=window_length
+            )
         except:
             # Handle exceptions and continue to the next iteration
             if i == 0:
