@@ -76,7 +76,7 @@ def clean_seg_extraction(
     
     # Initialize a list to store total clean segments with the specified window length
     clean_segments = []
-    clean_indices = []
+    # clean_indices = []
 
     # Extract clean segments based on window length
     for indices in start_end_clean_idx:
@@ -96,16 +96,17 @@ def clean_seg_extraction(
             for i in range(num_segments):
                 start_idx = indices[0]+ i*window_length
                 valid_clean_part = clean_part[i * window_length : (i+1) * window_length]
-                valid_clean_part_indices = clean_part_indices[i * window_length : (i+1) * window_length]
+                # valid_clean_part_indices = clean_part_indices[i * window_length : (i+1) * window_length]
                 segments.append((start_idx, valid_clean_part))
-                clean_indices.append(valid_clean_part_indices)
+                # clean_indices.append(valid_clean_part_indices)
             ####
             
             # Add extracted segments to total clean segments
             clean_segments.extend(segments)
+            
+    # return clean_segments, clean_indices
+    return clean_segments
 
-                
-    return clean_segments, clean_indices
 
 
 if __name__ == "__main__":
