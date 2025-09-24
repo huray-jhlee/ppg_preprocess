@@ -27,7 +27,7 @@ def main():
     # target_devices = ["cf782c01_10c971c2"]  # Todo: debug
     for target_device in target_devices:
         
-        parquet_paths = glob(os.path.join(DATA_DIR), target_device, "*parquet")
+        parquet_paths = glob(os.path.join(DATA_DIR, target_device, "*parquet"))
         sorted_parquet_paths = sorted(parquet_paths)
         # Todo: debug
         # sorted_parquet_paths = [f"/data3/watch_sensor_data/src/processed_data/{target_device}/2025-07-01.parquet"]
