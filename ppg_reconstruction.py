@@ -291,30 +291,33 @@ def reconstruction(
                 if set(range(
                     noise_start_idx - max_rec_length,
                     noise_start_idx)).issubset(clean_indices):
-                    # Perform noise reconstruction for the current noise
-                    reconstructed_noise = gan_rec(
-                        sig[noise_start_idx-max_rec_length:noise_start_idx],
-                        noise, sampling_rate, generator, device)
+                    try:
+                        # Perform noise reconstruction for the current noise
+                        reconstructed_noise = gan_rec(
+                            sig[noise_start_idx-max_rec_length:noise_start_idx],
+                            noise, sampling_rate, generator, device)
 
-                    # Upsample the reconstructed noise
-                    reconstructed_noise_res = resample(
-                        reconstructed_noise,
-                        int(len(reconstructed_noise)*UPSAMPLING_RATE))
+                        # Upsample the reconstructed noise
+                        reconstructed_noise_res = resample(
+                            reconstructed_noise,
+                            int(len(reconstructed_noise)*UPSAMPLING_RATE))
 
-                    # Upsample the clean signal before the noise
-                    sig_before_noise_res = resample(
-                        sig_scaled[:noise_start_idx],
-                        int(len(sig_scaled[:noise_start_idx])*UPSAMPLING_RATE))
+                        # Upsample the clean signal before the noise
+                        sig_before_noise_res = resample(
+                            sig_scaled[:noise_start_idx],
+                            int(len(sig_scaled[:noise_start_idx])*UPSAMPLING_RATE))
 
-                    # Upsample the clean signal after the noise
-                    sig_after_noise_res = resample(
-                        sig_scaled[noise[-1]:],
-                        int(len(sig_scaled[noise[-1]:])*UPSAMPLING_RATE))
+                        # Upsample the clean signal after the noise
+                        sig_after_noise_res = resample(
+                            sig_scaled[noise[-1]:],
+                            int(len(sig_scaled[noise[-1]:])*UPSAMPLING_RATE))
 
-                    # Find peaks in the clean signal before the noise
-                    peaks_sig_before_noise, _ = find_peaks(
-                        sig_before_noise_res,
-                        int(sampling_rate*UPSAMPLING_RATE))
+                        # Find peaks in the clean signal before the noise
+                        peaks_sig_before_noise, _ = find_peaks(
+                            sig_before_noise_res,
+                            int(sampling_rate*UPSAMPLING_RATE))
+                    except:
+                        continue
 
                     # Check if the reconstructed noise is long enough
                     #   (considering a threshold of 2 seconds)

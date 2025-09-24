@@ -159,6 +159,9 @@ def data_preprocessing(raw_parquet: pd.DataFrame, target_device):
     start_time = min(raw_parquet["collected_time"])
     end_time = max(raw_parquet["collected_time"])
     
+    # start_time = pd.Timestamp("2025-07-01 11:00:00", tzinfo=ZoneInfo("Asia/Seoul"))
+    # end_time = pd.Timestamp("2025-07-01 11:30:00", tzinfo=ZoneInfo("Asia/Seoul"))
+    
     mask = (raw_parquet["collected_time"] >= start_time) & (raw_parquet["collected_time"] <= end_time)
     
     filtered_df = raw_parquet.loc[mask].reset_index(drop=True)
@@ -254,7 +257,8 @@ def denoising_data(wiener_filter, data_df):
     
     for i, row in tqdm(data_df.iterrows(), total=len(data_df)):
         try:
-            galaxy_ppg = - np.array([float(x) for x in row["galaxyPPG"].split(";") if x.strip()])
+            # galaxy_ppg = - np.array([float(x) for x in row["galaxyPPG"].split(";") if x.strip()])
+            galaxy_ppg = np.array([float(x) for x in row["galaxyPPG"].split(";") if x.strip()])
             galaxy_acc = np.array([float(x) for x in row["galaxyACC"].split(";") if x.strip()]).reshape(-1, 3)
             
             galaxy_denoised, galaxy_bpm = wiener_filter.process_galaxy(

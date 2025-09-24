@@ -1,8 +1,7 @@
 import os
 import json
-import numpy as np
 import pandas as pd
-from tqdm import tqdm
+from glob import glob
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 
@@ -15,13 +14,29 @@ from ppg_hrv_extraction import hrv_extraction
 from ppg_reconstruction import reconstruction
 from ppg_clean_extraction import clean_seg_extraction
 
-from utils import convert_date, label_filtering, extract_behavior_ranges,\
-    label_window_from_ranges, peak_detection, data_preprocessing, denoising_data
+from utils import label_filtering, extract_behavior_ranges,label_window_from_ranges,\
+    peak_detection, data_preprocessing, denoising_data
 
 DATA_DIR = "/data3/watch_sensor_data/src/processed_data"
 LABEL_DIR = "/data3/ppg_data/raw/"
 
-def main(args):
+def main():
+    
+    target_devices = os.listdir(DATA_DIR)
+    # target_devices = ["cf782c01_10c971c2"]  # Todo: debug
+    for target_device in target_devices:
+        
+        parquet_paths = glob(os.path.join(DATA_DIR), target_device, "*parquet")
+        sorted_parquet_paths = sorted(parquet_paths)
+        # Todo: debug
+        # sorted_parquet_paths = [f"/data3/watch_sensor_data/src/processed_data/{target_device}/2025-07-01.parquet"]
+        for parquet_path in sorted_parquet_paths:
+            target_date = os.path.basename(parquet_path).split(".")[0]
+            
+            preprocess(target_device, target_date, parquet_path)
+
+
+def preprocess(target_device, target_date, parquet_path):
     """
     0. Data 파싱..
         -> 8 seconds 단위의 ppg, acc(x, y, z) 값들
@@ -40,31 +55,27 @@ def main(args):
     # 0. 데이터 파싱
     
     ## TODO: interation with target_device, each files
-    # target_device = args.target_deivce
-    # target_date = args.target_date
-    target_device = "cf782c01_10c971c2"
-    target_date = "250701"
-    cvt_target_date = convert_date(target_date)
     
-    tmp_data_path = os.path.join(DATA_DIR, target_device, f"{cvt_target_date}.parquet")
     tmp_label_path = os.path.join(LABEL_DIR, target_device, "har_label", f"250714_har.json")
     
     # label flitering
     with open(tmp_label_path, "r") as f:
         label_datas = json.load(f)
     
-    target_har_label = label_filtering(label_datas, cvt_target_date)
+    target_har_label = label_filtering(label_datas, target_date)
     target_har_ranges = extract_behavior_ranges(target_har_label)
     
     # raw data preprocessing
-    raw_parquet = pd.read_parquet(tmp_data_path, engine="pyarrow")
+    
+    print("Load DataFrame")
+    raw_parquet = pd.read_parquet(parquet_path, engine="pyarrow")
     df = data_preprocessing(raw_parquet, target_device)  # target_device 빼도 되긴 할텐데
     
     # ========================================================================
     # 1. Bandpass Filtering + Denoising
     wiener = WienerDenoising(
-        # hz_hp=0.5,
-        hz_hp=1,
+        hz_hp=0.5,
+        # hz_hp=1,
         hz_lp=3
     )
     
@@ -153,16 +164,9 @@ def main(args):
         hrv_data["label"] = label_values
         
         hrv_data.to_parquet("tmp.parquet", engine="pyarrow", index=False)
-    
-    pass
 
 if __name__ == "__main__":
-    import argparse
+    main()
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--device", type=str, default="cf782c01_10c971c2")
-    parser.add_argument("--date", type=str, default="250701")
-    
-    args = parser.parse_args()
-    
-    main(args)
+    # TODO:
+    # 1. Overlapping Window
