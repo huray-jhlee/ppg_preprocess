@@ -19,6 +19,7 @@ from utils import label_filtering, extract_behavior_ranges,label_window_from_ran
 
 DATA_DIR = "/data3/watch_sensor_data/src/processed_data"
 LABEL_DIR = "/data3/ppg_data/raw/"
+SAVE_DIR = "/data3/jh/250923_processed_ppg_feature/hrv_feature"
 
 def main():
     
@@ -163,7 +164,10 @@ def preprocess(target_device, target_date, parquet_path):
         
         hrv_data["label"] = label_values
         
-        hrv_data.to_parquet("tmp.parquet", engine="pyarrow", index=False)
+        save_path = os.path.join(SAVE_DIR, target_device, f"{target_date}.parquet")
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        hrv_data.to_parquet(save_path, engine="pyarrow", index=False)
 
 if __name__ == "__main__":
     main()
